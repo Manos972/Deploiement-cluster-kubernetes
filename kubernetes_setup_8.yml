@@ -61,3 +61,55 @@
       register: kubeadm_output
       failed_when: "'[ERROR]' in kubeadm_output.stdout or '[ERROR]' in kubeadm_output.stderr"
       when: "'Master' in group_names"
+      
+    - name: Créer le répertoire kube
+      file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        mode: 0755
+      when: "'Master' in group_names"
+
+    - name: Copier le fichier de configuration kubeconfig dans le répertoire de l'utilisateur
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ ansible_user }}/.kube/config"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+        remote_src: yes
+      when: "'Master' in group_names"
+
+    - name: Définir la variable d'environnement KUBECONFIG
+      lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: 'export KUBECONFIG=/home/{{ ansible_user }}/.kube/config'
+        create: yes
+      when: "'Master' in group_names"
+
+    - name: Installer le plugin réseau (exemple avec flannel)
+      command:
+        cmd: kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+      environment:
+        KUBECONFIG: "/home/{{ ansible_user }}/.kube/config"
+      when: "'Master' in group_names"
+
+    - name: Récupérer le kubeconfig pour la machine de contrôle
+      fetch:
+        src: "/etc/kubernetes/admin.conf"
+        dest: "/tmp/admin.conf"
+        flat: yes
+      when: "'Master' in group_names"
+
+    - name: Copier kubeconfig vers les autres nœuds
+      copy:
+        src: "/tmp/admin.conf"
+        dest: "$HOME/.kube/config"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        remote_src: yes
+      when: "'Worker' in group_names"
+
+    - name: Joindre les nœuds ouvriers au cluster
+      command: "{{ master_kubeadm_join }} --ignore-preflight-errors=all"
+      when: "'Worker' in group_names"
+
