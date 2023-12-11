@@ -2,115 +2,62 @@
 - name: Déployer le cluster Kubernetes
   hosts: all
   become: true
+  pre_tasks:
+    - name: Vérifier que le système est Ubuntu/Debian
+      fail:
+        msg: "Ce playbook requiert un système d'exploitation de type 'Debian' à exécuter. Le système actuel est '{{ ansible_os_family }}'."
+      when: ansible_os_family != 'Debian'
   tasks:
-    - name: Installer les paquets requis
-      apt:
-        name:
-          - apt-transport-https
-          - ca-certificates
-          - curl
-          - software-properties-common
-        state: present
-      when: ansible_os_family == 'Debian'
 
-    - name: Ajouter la clé GPG officielle de Docker
-      apt_key:
-        url: "https://download.docker.com/linux/ubuntu/gpg"
-      when: ansible_os_family == 'Debian'
+    - name: Bloc de tâches pour Debian
+      block:
+        - name: Installer les paquets requis
+          apt:
+            name:
+              - apt-transport-https
+              - ca-certificates
+              - curl
+              - software-properties-common
+            state: present
 
-    - name: Obtenir le nom de code d'Ubuntu
-      command: lsb_release -cs
-      register: ubuntu_codename
-      when: ansible_os_family == 'Debian'
+        - name: Ajouter la clé GPG officielle de Docker
+          apt_key:
+            url: "https://download.docker.com/linux/ubuntu/gpg"
+    
+        - name: Obtenir le nom de code d'Ubuntu
+          command: lsb_release -cs
+          register: ubuntu_codename
 
-    - name: Ajouter le référentiel Docker
-      apt_repository:
-        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ubuntu_codename.stdout }} stable"
-        update_cache: yes
-      when: ansible_os_family == 'Debian'
+        - name: Ajouter le référentiel Docker
+          apt_repository:
+            repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ubuntu_codename.stdout }} stable"
+            update_cache: yes
 
-    - name: Installer Docker CE
-      apt:
-        name: docker-ce
-        state: present
-      when: ansible_os_family == 'Debian'
+        - name: Installer Docker CE
+          apt:
+            name: docker-ce
+            state: present
 
-    - name: Ajouter la clé GPG de Kubernetes
-      apt_key:
-        url: "https://packages.cloud.google.com/apt/doc/apt-key.gpg"
-      become: true
-      when: ansible_os_family == 'Debian'
+        - name: Ajouter la clé GPG de Kubernetes
+          apt_key:
+            url: "https://packages.cloud.google.com/apt/doc/apt-key.gpg"
 
-    - name: Installer Kubernetes
-      apt_repository:
-        repo: "deb http://apt.kubernetes.io/ kubernetes-xenial main"
-      become: true
-      when: ansible_os_family == 'Debian'
+        - name: Installer Kubernetes
+          apt_repository:
+            repo: "deb http://apt.kubernetes.io/ kubernetes-xenial main"
 
-    - name: Installer les composants Kubernetes
-      apt:
-        name:
-          - kubelet
-          - kubeadm
-          - kubectl
-        state: present
-      when: ansible_os_family == 'Debian'
+        - name: Installer les composants Kubernetes
+          apt:
+            name:
+              - kubelet
+              - kubeadm
+              - kubectl
+            state: present
 
     - name: Initialiser le nœud maître Kubernetes
       command: kubeadm init --pod-network-cidr=10.244.0.0/16 --ignore-preflight-errors=NumCPU --ignore-preflight-errors=Mem
       args:
         creates: /etc/kubernetes/admin.conf
-      become: true
-      when: "'Master' in group_names"
       register: kubeadm_output
-
-    - name: Créer le répertoire kube
-      file:
-        path: "/home/{{ ansible_user }}/.kube"
-        state: directory
-        mode: 0755
+      failed_when: "'[ERROR]' in kubeadm_output.stdout or '[ERROR]' in kubeadm_output.stderr"
       when: "'Master' in group_names"
-
-    - name: Copier le fichier de configuration kubeconfig dans le répertoire de l'utilisateur
-      copy:
-        src: /etc/kubernetes/admin.conf
-        dest: "/home/{{ ansible_user }}/.kube/config"
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0644'
-        remote_src: yes
-      when: "'Master' in group_names"
-
-    - name: Définir la variable d'environnement KUBECONFIG
-      lineinfile:
-        path: "/home/{{ ansible_user }}/.bashrc"
-        line: 'export KUBECONFIG=/home/{{ ansible_user }}/.kube/config'
-        create: yes
-      when: "'Master' in group_names"
-
-    - name: Installer le plugin réseau (exemple avec flannel)
-      command:
-        cmd: kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
-      environment:
-        KUBECONFIG: "/home/{{ ansible_user }}/.kube/config"
-      when: "'Master' in group_names"
-
-    - name: Récupérer le kubeconfig pour la machine de contrôle
-      fetch:
-        src: "/etc/kubernetes/admin.conf"
-        dest: "/tmp/admin.conf"
-        flat: yes
-      when: "'Master' in group_names"
-
-    - name: Copier kubeconfig vers les autres nœuds
-      copy:
-        src: "/tmp/admin.conf"
-        dest: "$HOME/.kube/config"
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        remote_src: yes
-      when: "'Worker' in group_names"
-
-    - name: Joindre les nœuds ouvriers au cluster
-      command: "{{ master_kubeadm_join }} --ignore-preflight-errors=all"
-      when: "'Worker' in group_names"
